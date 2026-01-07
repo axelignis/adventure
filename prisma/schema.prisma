@@ -1,0 +1,684 @@
+// Prisma Schema - Aventura Marketplace MVP
+// Version: Fase 1 (MVP crítico) + estructura lista para Fase 2
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  extensions = [unaccent, pg_trgm]
+}
+
+// ============================================================================
+// AUTHENTICATION & USERS
+// ============================================================================
+
+enum UserRole {
+  CLIENT
+  GUIDE       // Fase 2
+  ADMIN       // Fase 2
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  phone         String?   @unique
+  phoneVerified Boolean   @default(false)
+  image         String?
+  role          UserRole  @default(CLIENT)
+  status        UserStatus @default(ACTIVE)
+  
+  // Profile
+  language      String    @default("es") // es | en
+  regionId      String?
+  comunaId      String?
+  
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  bookings      Booking[]
+  reviews       Review[]
+  favorites     Favorite[]
+  notifications Notification[]
+  messages      Message[]
+  
+  // Fase 2: When user is a guide
+  guideProfile  GuideProfile?
+  services      Service[]
+  
+  region        Region?   @relation(fields: [regionId], references: [id])
+  comuna        Comuna?   @relation(fields: [comunaId], references: [id])
+
+  @@index([email])
+  @@index([phone])
+  @@index([role, status])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================================================
+// GEOGRAPHY - CHILE
+// ============================================================================
+
+model Region {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  nameEn    String?
+  slug      String    @unique
+  order     Int       @default(0)
+  
+  comunas   Comuna[]
+  services  Service[]
+  users     User[]
+  
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([slug])
+}
+
+model Comuna {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String
+  regionId  String
+  
+  region    Region    @relation(fields: [regionId], references: [id])
+  services  Service[]
+  users     User[]
+  
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([regionId, slug])
+  @@index([regionId])
+  @@index([slug])
+}
+
+// ============================================================================
+// CATEGORIES & ACTIVITIES
+// ============================================================================
+
+enum ActivityCategory {
+  KAYAK
+  RAFTING
+  TREKKING
+  PESCA
+  MONTANISMO
+  CICLISMO
+  ESCALADA
+  OTROS
+}
+
+enum DifficultyLevel {
+  PRINCIPIANTE
+  BASICO
+  INTERMEDIO
+  AVANZADO
+  EXPERTO
+}
+
+enum Duration {
+  MEDIO_DIA      // ≤ 4 hours
+  DIA_COMPLETO   // 5-10 hours
+  MULTI_DIA      // > 1 day
+}
+
+// ============================================================================
+// SERVICES (Experiencias)
+// ============================================================================
+
+enum ServiceStatus {
+  DRAFT          // Fase 2: Guide is creating
+  PENDING        // Fase 2: Waiting admin approval
+  APPROVED       // Live and bookable
+  SUSPENDED      // Temporarily disabled
+  ARCHIVED       // Permanently disabled
+}
+
+model Service {
+  id              String          @id @default(cuid())
+  slug            String          @unique
+  
+  // Basic Info
+  title           String
+  titleEn         String?
+  description     String          @db.Text
+  descriptionEn   String?         @db.Text
+  
+  // Classification
+  category        ActivityCategory
+  difficulty      DifficultyLevel
+  duration        Duration
+  
+  // Location
+  regionId        String
+  comunaId        String
+  lat             Float?
+  lng             Float?
+  meetingPoint    String?         @db.Text // Descripción punto de encuentro
+  exactLocation   String?         @db.Text // Solo visible post-booking
+  
+  // Pricing
+  priceBase       Int             // CLP, price "desde"
+  currency        String          @default("CLP")
+  
+  // Capacity
+  minParticipants Int             @default(1)
+  maxParticipants Int             @default(10)
+  
+  // Requirements & Details
+  requirements    Json?           // {physical, technical, ageMin, swimming, etc}
+  included        String[]        // What's included
+  notIncluded     String[]        // What's NOT included
+  itinerary       Json?           // [{time, description, location}]
+  whatToBring     String[]        // Equipment client must bring
+  providedGear    String[]        // Equipment we provide
+  
+  // Images
+  coverImage      String?
+  images          ServiceImage[]
+  
+  // Metadata
+  status          ServiceStatus   @default(DRAFT)
+  verified        Boolean         @default(false)
+  featured        Boolean         @default(false)
+  
+  // Stats (denormalized for performance)
+  rating          Float?          @default(0)
+  reviewCount     Int             @default(0)
+  bookingCount    Int             @default(0)
+  viewCount       Int             @default(0)
+  
+  // Search
+  searchVector    Unsupported("tsvector")?
+  
+  // Relations
+  guideId         String
+  guide           User            @relation(fields: [guideId], references: [id])
+  region          Region          @relation(fields: [regionId], references: [id])
+  comuna          Comuna          @relation(fields: [comunaId], references: [id])
+  
+  addOns          ServiceAddOn[]
+  availability    ServiceAvailability[]
+  bookings        Booking[]
+  reviews         Review[]
+  favorites       Favorite[]
+  faqs            ServiceFAQ[]
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  publishedAt     DateTime?
+
+  @@index([slug])
+  @@index([category, status])
+  @@index([regionId, comunaId])
+  @@index([difficulty])
+  @@index([status, verified])
+  @@index([rating])
+  @@index([guideId])
+  // Full-text search index created via migration
+}
+
+model ServiceImage {
+  id          String   @id @default(cuid())
+  serviceId   String
+  url         String
+  altText     String
+  altTextEn   String?
+  caption     String?
+  order       Int      @default(0)
+  width       Int?
+  height      Int?
+  hash        String?  // For deduplication
+  
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+
+  @@index([serviceId])
+  @@unique([serviceId, hash])
+}
+
+model ServiceAddOn {
+  id          String   @id @default(cuid())
+  serviceId   String
+  type        String   // "hospedaje" | "embarcacion" | "pickup" | "equipo_premium"
+  name        String
+  nameEn      String?
+  description String?
+  price       Int      // CLP
+  maxQuantity Int      @default(1)
+  
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([serviceId])
+}
+
+model ServiceAvailability {
+  id          String   @id @default(cuid())
+  serviceId   String
+  date        DateTime @db.Date
+  slot        String   // "AM" | "PM" | "FULL"
+  capacity    Int      // Available spots
+  
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([serviceId, date, slot])
+  @@index([serviceId, date])
+}
+
+model ServiceFAQ {
+  id          String   @id @default(cuid())
+  serviceId   String
+  question    String
+  questionEn  String?
+  answer      String   @db.Text
+  answerEn    String?  @db.Text
+  order       Int      @default(0)
+  
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([serviceId])
+}
+
+// ============================================================================
+// BOOKINGS (Reservas)
+// ============================================================================
+
+enum BookingStatus {
+  REQUESTED           // Initial state after checkout
+  CONFIRMED           // Guide accepted (SLA 24h)
+  PAYMENT_PENDING     // Webpay Plus link sent (T-48h)
+  PAYMENT_CAPTURED    // Payment processed (T-48h or on confirm)
+  SCHEDULED           // Ready to go
+  COMPLETED           // Service delivered
+  CANCELLED_CLIENT    // Client cancelled
+  CANCELLED_PROVIDER  // Guide cancelled
+  CANCELLED_ADMIN     // Admin cancelled
+  DISPUTED            // Dispute opened
+  REFUNDED            // Money returned
+  EXPIRED             // Guide didn't confirm in 24h
+}
+
+enum CancellationReason {
+  CLIENT_REQUEST
+  WEATHER
+  SAFETY
+  NO_SHOW_CLIENT
+  NO_SHOW_PROVIDER
+  DISPUTE
+  OTHER
+}
+
+model Booking {
+  id                String          @id @default(cuid())
+  
+  // References
+  userId            String
+  serviceId         String
+  
+  // Booking Details
+  date              DateTime        @db.Date
+  slot              String          // "AM" | "PM" | "FULL"
+  participants      Int
+  
+  // Pricing
+  basePrice         Int             // CLP at time of booking
+  addOnsPrice       Int             @default(0)
+  totalPrice        Int
+  
+  // Selected Add-ons
+  addOns            Json?           // [{type, quantity, price}]
+  
+  // Participant Info
+  participantData   Json?           // [{name, age, restrictions}]
+  specialRequests   String?         @db.Text
+  dietaryRestrictions String?
+  
+  // Status & Flow
+  status            BookingStatus   @default(REQUESTED)
+  
+  // Payment
+  paymentMethod     String?         // "oneclick" | "webpay_plus"
+  paymentId         String?         // Transbank transaction ID
+  paymentToken      String?         // For Oneclick
+  paymentCapturedAt DateTime?
+  
+  // Cancellation & Refund
+  cancelledAt       DateTime?
+  cancellationReason CancellationReason?
+  refundAmount      Int?
+  refundedAt        DateTime?
+  
+  // SLA & Confirmations
+  requestedAt       DateTime        @default(now())
+  confirmedAt       DateTime?
+  expiresAt         DateTime?       // For REQUESTED status (24h)
+  
+  // Relations
+  user              User            @relation(fields: [userId], references: [id])
+  service           Service         @relation(fields: [serviceId], references: [id])
+  review            Review?
+  messages          Message[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  
+  // Timestamps
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([serviceId])
+  @@index([status])
+  @@index([date])
+  @@index([status, date])
+}
+
+// ============================================================================
+// REVIEWS & RATINGS
+// ============================================================================
+
+enum ReviewStatus {
+  PENDING_MODERATION
+  PUBLISHED
+  HIDDEN
+  FLAGGED
+}
+
+model Review {
+  id          String        @id @default(cuid())
+  
+  bookingId   String        @unique
+  userId      String
+  serviceId   String
+  
+  // Rating (1-5 stars, integer only in MVP)
+  rating      Int           // 1-5
+  
+  // Content
+  title       String?
+  comment     String        @db.Text
+  
+  // Images
+  images      ReviewImage[]
+  
+  // Moderation
+  status      ReviewStatus  @default(PENDING_MODERATION)
+  flagCount   Int           @default(0)
+  moderatedAt DateTime?
+  moderatedBy String?
+  
+  // Guide Response (Fase 1 - simple)
+  providerResponse     String?    @db.Text
+  providerRespondedAt  DateTime?
+  
+  // Helpful votes (Fase 2)
+  helpfulCount Int          @default(0)
+  
+  // Relations
+  booking     Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id])
+  service     Service       @relation(fields: [serviceId], references: [id])
+  
+  // Timestamps
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  publishedAt DateTime?
+
+  @@index([serviceId, status])
+  @@index([userId])
+  @@index([status, publishedAt])
+}
+
+model ReviewImage {
+  id        String   @id @default(cuid())
+  reviewId  String
+  url       String
+  altText   String?
+  order     Int      @default(0)
+  hash      String?
+  
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+
+  @@index([reviewId])
+}
+
+// ============================================================================
+// FAVORITES (Wishlist)
+// ============================================================================
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  serviceId String
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+
+  @@unique([userId, serviceId])
+  @@index([userId])
+  @@index([serviceId])
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+enum NotificationChannel {
+  EMAIL
+  PUSH_WEB
+  WHATSAPP
+  SMS
+  IN_APP
+}
+
+enum NotificationEvent {
+  BOOKING_REQUESTED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  PAYMENT_PENDING
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  REMINDER_48H
+  REMINDER_24H
+  MESSAGE_NEW
+  REVIEW_REQUEST
+  REVIEW_RECEIVED
+  DISPUTE_OPENED
+  DISPUTE_UPDATED
+}
+
+model Notification {
+  id          String              @id @default(cuid())
+  userId      String
+  bookingId   String?
+  
+  event       NotificationEvent
+  channel     NotificationChannel
+  
+  title       String
+  body        String              @db.Text
+  deepLink    String?
+  
+  read        Boolean             @default(false)
+  readAt      DateTime?
+  
+  sentAt      DateTime?
+  failedAt    DateTime?
+  errorMsg    String?
+  
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking     Booking?            @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  
+  createdAt   DateTime            @default(now())
+
+  @@index([userId, read])
+  @@index([bookingId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MESSAGES (Chat post-pago, Fase 1 simple)
+// ============================================================================
+
+model Message {
+  id          String   @id @default(cuid())
+  bookingId   String
+  senderId    String
+  
+  content     String   @db.Text
+  
+  read        Boolean  @default(false)
+  readAt      DateTime?
+  
+  booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  sender      User     @relation(fields: [senderId], references: [id])
+  
+  createdAt   DateTime @default(now())
+
+  @@index([bookingId, createdAt])
+  @@index([senderId])
+}
+
+// ============================================================================
+// AUDIT LOG (para compliance y disputas)
+// ============================================================================
+
+enum AuditAction {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  PAYMENT_CAPTURED
+  REFUND_ISSUED
+  STATUS_CHANGED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+  SERVICE_APPROVED
+  SERVICE_SUSPENDED
+  USER_SUSPENDED
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  
+  action      AuditAction
+  entity      String      // "booking" | "service" | "user"
+  entityId    String
+  
+  actorId     String?     // Who did it (user or system)
+  actorRole   UserRole?
+  
+  changes     Json?       // {field: {from, to}}
+  metadata    Json?       // Additional context
+  ipAddress   String?
+  userAgent   String?
+  
+  bookingId   String?
+  booking     Booking?    @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  
+  createdAt   DateTime    @default(now())
+
+  @@index([entity, entityId])
+  @@index([bookingId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// GUIDE PROFILE (Fase 2, estructura lista)
+// ============================================================================
+
+model GuideProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  
+  // Identity & Verification
+  rut             String?  @unique
+  verified        Boolean  @default(false)
+  verifiedAt      DateTime?
+  
+  // Profile
+  bio             String?  @db.Text
+  bioEn           String?  @db.Text
+  languages       String[] // ["es", "en", "pt"]
+  yearsExperience Int?
+  
+  // Business
+  businessName    String?
+  bankAccount     String?  // Encrypted
+  
+  // Stats
+  totalBookings   Int      @default(0)
+  averageRating   Float?
+  responseTime    Int?     // minutes avg
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([verified])
+}
