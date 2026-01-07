@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import { Calendar as CalendarIcon, Users, Minus, Plus } from "lucide-react";
@@ -30,6 +31,7 @@ export function BookingWidget({
   maxParticipants,
   availableDates = [],
 }: BookingWidgetProps) {
+  const router = useRouter();
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
   const [participants, setParticipants] = useState(minParticipants);
 
@@ -48,13 +50,13 @@ export function BookingWidget({
       return;
     }
 
-    // TODO: Implement booking flow
-    console.log("Booking:", {
-      serviceId,
-      date: selectedDate,
-      participants,
-      totalPrice,
-    });
+    // Redirect to checkout with booking data
+    const checkoutUrl = new URL("/checkout", window.location.origin);
+    checkoutUrl.searchParams.set("serviceId", serviceId);
+    checkoutUrl.searchParams.set("date", selectedDate.toISOString());
+    checkoutUrl.searchParams.set("participants", participants.toString());
+
+    router.push(checkoutUrl.toString());
   };
 
   // Disable dates that are not available
